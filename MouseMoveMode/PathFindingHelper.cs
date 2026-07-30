@@ -380,6 +380,10 @@ namespace MouseMoveMode
                     for (int j = -1; j <= 1; j += 1)
                     {
                         Vector2 neighbor = new Vector2(current.X + i, current.Y + j);
+
+                        if (visited.Contains(neighbor))
+                            continue;
+
                         if (isValidMovement(current, neighbor))
                         {
                             // Pass all checked, this tile could be consider to be use
