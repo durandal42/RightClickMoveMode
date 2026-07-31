@@ -10,24 +10,15 @@ namespace MouseMoveMode
 {
     class Util
     {
-        public static bool debugPassable { get; private set; } = false;
+        public static bool debugPassable { get; private set; } = true;
         private static bool debugPassableVebose = false;
-        private static HashSet<Vector2> cacheCantPassable = new HashSet<Vector2>();
-        private static List<DrawableNode> nonPassableNodes = new List<DrawableNode>();
+        private static Dictionary<Vector2, bool> cachePassable = new();
+        private static List<DrawableNode> nonPassableNodes = new();
 
         public static void flushCache()
         {
-            if (cacheCantPassable.Count != 0)
-            {
-                cacheCantPassable.Clear();
-            }
-            if (Util.debugPassable)
-            {
-                if (nonPassableNodes.Count != 0)
-                {
-                    nonPassableNodes.Clear();
-                }
-            }
+            cachePassable.Clear();
+            nonPassableNodes.Clear();
         }
 
         public static void drawPassable(SpriteBatch b)
@@ -69,10 +60,15 @@ namespace MouseMoveMode
          */
         private static bool _isTilePassable(Vector2 tile, bool useBetter)
         {
-            if (useBetter)
-                return _isTilePassableOld(tile);
-            else
-                return _isTilePassableNew(tile);
+            if (cachePassable.ContainsKey(tile))
+                return cachePassable[tile];
+
+            var passable = useBetter ? _isTilePassableOld(tile) : _isTilePassableNew(tile);
+            cachePassable[tile] = passable;
+            if (!passable && Util.debugPassable)
+                nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
+
+            return passable;
         }
 
         /**
@@ -83,23 +79,18 @@ namespace MouseMoveMode
         {
             var l = Game1.player.currentLocation;
             var building = l.getBuildingAt(tile);
-            if (building is not null)
+            if (building is not null && !building.isTilePassable(tile))
             {
-                if (!building.isTilePassable(tile))
-                {
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
-                    if (Util.debugPassableVebose)
-                        ModEntry.getMonitor().Log("Found unpassable building " + building + " at tile " + tile, LogLevel.Info);
-                    return false;
-                }
+                if (Util.debugPassableVebose)
+                    ModEntry.getMonitor().Log("Found unpassable building " + building + " at tile " + tile, LogLevel.Info);
+                return false;
             }
 
             const CollisionMask collisionMask = CollisionMask.Furniture | CollisionMask.Objects |
                                     CollisionMask.TerrainFeatures | CollisionMask.LocationSpecific;
             if (l.isTilePassable(tile) && !l.IsTileOccupiedBy(tile, collisionMask))
                 return true;
-            nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
+
             return false;
         }
 
@@ -108,37 +99,25 @@ namespace MouseMoveMode
          */
         private static bool _isTilePassableOld(Vector2 tile)
         {
-            if (cacheCantPassable.Contains(tile))
-            {
-                return false;
-            }
-
             GameLocation gl = Game1.player.currentLocation;
             if (!gl.isTilePassable(tile))
             {
                 if (Util.debugPassableVebose)
                     ModEntry.getMonitor().Log("Found unpassable tile from current location at " + tile, LogLevel.Info);
-                cacheCantPassable.Add(tile);
-                nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
                 return false;
             }
 
             var building = gl.getBuildingAt(tile);
-            if (building is not null)
+            if (building is not null&& !building.isTilePassable(tile))
             {
-                if (!building.isTilePassable(tile))
-                {
-                    cacheCantPassable.Add(tile);
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
-                    if (Util.debugPassableVebose)
-                        ModEntry.getMonitor().Log("Found unpassable building " + building + " at tile " + tile, LogLevel.Info);
-                    return false;
-                }
+                if (Util.debugPassableVebose)
+                    ModEntry.getMonitor().Log("Found unpassable building " + building + " at tile " + tile, LogLevel.Info);
+                return false;
             }
 
             foreach (var items in gl.terrainFeatures)
             {
+                // TODO: many items could slow down passability checks
                 if (!items.ContainsKey(tile))
                 {
                     continue;
@@ -147,38 +126,27 @@ namespace MouseMoveMode
                 {
                     continue;
                 }
-                //Tree can be cutdown, thus caching should not be consider, unless we flush every path-find
+                // Trees can be cut down, thus we shouldn't cache them, unless we flush every path-find. (We do.)
                 if (Util.debugPassableVebose)
                     ModEntry.getMonitor().Log("Found unpassable terrain feature " + items[tile], LogLevel.Info);
-                cacheCantPassable.Add(tile);
-                if (Util.debugPassable)
-                    nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
                 return false;
             }
 
             var largerTerrainFeature = gl.getLargeTerrainFeatureAt((int)tile.X, (int)tile.Y);
-            if (largerTerrainFeature is not null)
+            if (largerTerrainFeature is not null && !largerTerrainFeature.isPassable())
             {
-                if (!largerTerrainFeature.isPassable())
-                {
-                    //this.Monitor.Log("Found unpassable large terrain feature " + item + " at " + tile, LogLevel.Info);
-                    cacheCantPassable.Add(tile);
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
-                    return false;
-                }
+                //this.Monitor.Log("Found unpassable large terrain feature " + item + " at " + tile, LogLevel.Info);
+                return false;
             }
 
             foreach (StardewValley.TerrainFeatures.ResourceClump resourceClump in gl.resourceClumps)
             {
+                // TODO: many items could slow down passability checks
                 if (!resourceClump.isPassable() &&
                     resourceClump.getBoundingBox().Contains((int)tile.X * 64 + 32, (int)tile.Y * 64 + 32))
                 {
                     if (Util.debugPassableVebose)
                         ModEntry.getMonitor().Log("Found unpassable(?) resource clump " + resourceClump + " at " + tile, LogLevel.Info);
-                    cacheCantPassable.Add(tile);
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
                     return false;
                 }
             }
@@ -191,9 +159,6 @@ namespace MouseMoveMode
                     // Object like stone etc should also consider breakable, thus should not be cache
                     if (Util.debugPassableVebose)
                         ModEntry.getMonitor().Log("Found unpassable object" + item, LogLevel.Info);
-                    cacheCantPassable.Add(tile);
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
                     return false;
                 }
             }
@@ -222,9 +187,6 @@ namespace MouseMoveMode
                     // Object like stone etc should also consider breakable, thus should not be cache
                     if (Util.debugPassableVebose)
                         ModEntry.getMonitor().Log("Found unpassable furniture" + funiture, LogLevel.Info);
-                    cacheCantPassable.Add(tile);
-                    if (Util.debugPassable)
-                        nonPassableNodes.Add(new DrawableNode(Util.toBoxPosition(tile)));
                     return false;
                 }
             }
